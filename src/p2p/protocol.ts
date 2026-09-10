@@ -60,3 +60,17 @@ export type PeerMessageType = PeerMessageEvent['type'];
 export interface PeerCountEvent {
   count: number;
 }
+
+/**
+ * Identidad estable de un mensaje P2P, usada tanto para no procesar el
+ * mismo mensaje dos veces (`received_peer_messages`) como para no
+ * relayarlo dos veces al mismo peer (`relay_outbox`) — ver
+ * `src/services/database.ts`.
+ */
+export function dedupKeyForSos(payload: SosPayload): string {
+  return `sos:${payload.deviceId}:${payload.sentAt}`;
+}
+
+export function dedupKeyForEntry(payload: EntryPayload): string {
+  return `entry:${payload.deviceId}:${payload.createdAt}`;
+}

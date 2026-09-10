@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 
-import { peerSync } from '../p2p/peerSync';
+import type { PeerSyncState } from '../hooks/usePeerSync';
 import { addLogEntry } from '../services/database';
 import { getDeviceName, getOrCreateDeviceId } from '../services/identity';
 import { getCurrentGeoTag } from '../services/location';
@@ -13,7 +13,7 @@ const HOLD_MS = 1800;
 const TICK_MS = 60;
 
 interface SosButtonProps {
-  peerCount: number;
+  peer: PeerSyncState;
   onSent: () => void;
 }
 
@@ -23,8 +23,14 @@ interface SosButtonProps {
  * frase hablada bajo estrés. Requiere mantener presionado ~2s (como el SOS
  * de un celular) para evitar toques accidentales, y funciona sin importar
  * el estado del agente o si los modelos on-device ya cargaron.
+ *
+ * Lo más común en el campo es que nadie esté conectado en el instante
+ * exacto en que se aprieta el botón — por eso `peer.relaySos` no solo
+ * manda la alerta a quien esté conectado ahora, sino que la deja guardada
+ * para pasársela automáticamente a la próxima persona que aparezca en
+ * rango (ver `usePeerSync`).
  */
-export function SosButton({ peerCount, onSent }: SosButtonProps) {
+export function SosButton({ peer, onSent }: SosButtonProps) {
   const [progress, setProgress] = useState(0);
   const [sent, setSent] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -66,8 +72,8 @@ export function SosButton({ peerCount, onSent }: SosButtonProps) {
 
     await addLogEntry('sos', 'Alerta SOS enviada', location, { deviceId, deviceName });
 
-    const connectedPeers = peerSync.connectedPeerCount;
-    peerSync.broadcastSos({
+    const connectedPeers = peer.peerCount;
+    await peer.relaySos({
       deviceId,
       deviceName,
       sentAt,
@@ -78,7 +84,7 @@ export function SosButton({ peerCount, onSent }: SosButtonProps) {
     const confirmation =
       connectedPeers > 0
         ? `Alerta enviada a ${connectedPeers} ${connectedPeers === 1 ? 'par conectado' : 'pares conectados'}.`
-        : 'Guardada localmente. Sin pares conectados en este momento.';
+        : 'Guardada. Sin pares conectados ahora — se manda sola apenas aparezca uno.';
 
     setSent(confirmation);
     Speech.speak(`Alerta S O S. ${confirmation}`, { language: 'es-ES' });
@@ -98,7 +104,7 @@ export function SosButton({ peerCount, onSent }: SosButtonProps) {
         <Text style={styles.label}>SOS</Text>
       </Pressable>
       <Text style={styles.hint}>
-        {progress > 0 ? 'Mantené presionado…' : `Mantené presionado 2s · ${peerCount} par(es) conectados`}
+        {progress > 0 ? 'Mantené presionado…' : `Mantené presionado 2s · ${peer.peerCount} par(es) conectados`}
       </Text>
       {sent && <Text style={styles.confirmation}>{sent}</Text>}
     </View>
