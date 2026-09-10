@@ -39,6 +39,8 @@
     "@types/react": "~19.1.0",
     "bare-link": "^3.3.0",
     "bare-pack": "^2.2.2",
+    "ble-swarm": "^2.3.0",
+    "hypercore-crypto": "^3.7.0",
     "hyperswarm": "^4.17.1",
     "typescript": "^5.9.3"
   }

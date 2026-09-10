@@ -4,20 +4,36 @@
  * (ver scripts/build-worklet.mjs) y se arranca desde
  * `src/p2p/peerSync.ts` con `worklet.start('/app.bundle', bundleBytes)`.
  *
- * Responsabilidad única: unirse a un swarm de Hyperswarm identificado por
- * un topic derivado del "código de cuadrilla" que le manda React Native, y
- * hacer de gateway simple entre esa red P2P y la app — nunca toma
- * decisiones de negocio (eso vive del lado de React Native).
+ * Responsabilidad única: unirse, por DOS transportes en paralelo, a la red
+ * P2P identificada por un topic derivado del "código de cuadrilla" que
+ * manda React Native, y hacer de gateway simple entre esa red y la app —
+ * nunca toma decisiones de negocio (eso vive del lado de React Native):
+ *
+ *   - Hyperswarm (HyperDHT): funciona si hay algún camino de red (wifi
+ *     local compartido, o una ventana breve de señal para el handshake
+ *     inicial). Alcance: el de esa red.
+ *   - ble-swarm (Bluetooth LE, @holepunchto/ble-swarm sobre bare-bluetooth):
+ *     funciona con CERO red de por medio — el caso límite real de "donde la
+ *     nube no debería llegar", dos radios BLE viéndose directamente.
+ *     Alcance: line-of-sight BLE, unos 10-30m típico.
+ *
+ * Ambos transportes emiten el mismo tipo de conexión (un NoiseSecretStream
+ * cifrado) sobre la misma interfaz dúplex, así que comparten un único
+ * manejador de peers (`attachPeer`) — el resto del protocolo no distingue
+ * por qué radio llegó un mensaje.
  *
  * Protocolo con React Native (por `BareKit.IPC`, un stream dúplex de bytes):
  * usa `bare-rpc`, un comando por mensaje, ver PROTOCOLO más abajo.
  *
- * Protocolo entre peers (por el socket que entrega `swarm.on('connection')`):
- * líneas de texto terminadas en '\n', cada una un JSON `{ type, payload }`.
- * Deliberadamente simple (no bare-rpc) porque acá el número de peers no es
- * 1, y un framing de líneas es trivial de auditar a simple vista.
+ * Protocolo entre peers (por el socket que entregan `swarm.on('connection')`
+ * / `bt.on('connection')`): líneas de texto terminadas en '\n', cada una un
+ * JSON `{ type, payload }`. Deliberadamente simple (no bare-rpc) porque acá
+ * el número de peers no es 1, y un framing de líneas es trivial de auditar
+ * a simple vista.
  */
 const Hyperswarm = require('hyperswarm')
+const BluetoothSwarm = require('ble-swarm')
+const crypto = require('hypercore-crypto')
 const RPC = require('bare-rpc')
 const b4a = require('b4a')
 
@@ -32,9 +48,19 @@ const EVT_MESSAGE = 11 // data: { type: 'sos' | 'entry', payload, fromPeer }
 
 const { IPC } = BareKit
 
-const swarm = new Hyperswarm()
+// Una sola identidad Noise compartida entre los dos transportes: el mismo
+// par de claves para Hyperswarm y para ble-swarm significa que un
+// compañero que te ve por wifi Y por Bluetooth es UN peer, no dos, a nivel
+// de identidad criptográfica (el conteo/gossip igual puede duplicar la
+// conexión — ver nota en README).
+const keyPair = crypto.keyPair()
+
+const swarm = new Hyperswarm({ keyPair })
+const bt = new BluetoothSwarm({ keyPair })
+
 const peers = new Set()
 let currentTopic = null
+let bleStarted = false
 
 function send(command, data) {
   const req = rpc.request(command)
@@ -48,9 +74,11 @@ function broadcastToPeers(message) {
   }
 }
 
-swarm.on('connection', (socket, peerInfo) => {
+function attachPeer(socket, remotePublicKey) {
   peers.add(socket)
   send(EVT_PEER_COUNT, { count: peers.size })
+
+  const fromPeer = b4a.toString(remotePublicKey, 'hex').slice(0, 8)
 
   let buffer = ''
   socket.on('data', (chunk) => {
@@ -64,11 +92,7 @@ swarm.on('connection', (socket, peerInfo) => {
       try {
         const message = JSON.parse(line)
         if (message && (message.type === 'sos' || message.type === 'entry')) {
-          send(EVT_MESSAGE, {
-            type: message.type,
-            payload: message.payload,
-            fromPeer: b4a.toString(peerInfo.publicKey, 'hex').slice(0, 8)
-          })
+          send(EVT_MESSAGE, { type: message.type, payload: message.payload, fromPeer })
         }
       } catch {
         // Línea que no es JSON válido: se descarta. Nunca se ejecuta ni
@@ -83,7 +107,10 @@ swarm.on('connection', (socket, peerInfo) => {
   }
   socket.on('close', onClose)
   socket.on('error', onClose)
-})
+}
+
+swarm.on('connection', (socket, peerInfo) => attachPeer(socket, peerInfo.publicKey))
+bt.on('connection', (conn) => attachPeer(conn, conn.remotePublicKey))
 
 const rpc = new RPC(IPC, (req) => {
   const data = req.data ? JSON.parse(b4a.toString(req.data)) : null
@@ -91,6 +118,14 @@ const rpc = new RPC(IPC, (req) => {
   if (req.command === CMD_JOIN) {
     currentTopic = b4a.from(data.topicHex, 'hex')
     swarm.join(currentTopic, { server: true, client: true })
+
+    // ble-swarm es tolerante a hardware/plataformas sin BLE: en ese caso
+    // reporta `unsupported` y estas llamadas son un no-op inofensivo.
+    if (!bleStarted) {
+      bleStarted = true
+      bt.start().catch(() => {})
+    }
+    bt.setTopic(currentTopic).catch(() => {})
     return
   }
 
@@ -98,6 +133,10 @@ const rpc = new RPC(IPC, (req) => {
     if (currentTopic) {
       swarm.leave(currentTopic)
       currentTopic = null
+    }
+    if (bleStarted) {
+      bleStarted = false
+      bt.stop().catch(() => {})
     }
     return
   }
