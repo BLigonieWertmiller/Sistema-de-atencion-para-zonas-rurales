@@ -399,9 +399,13 @@ src/
   traducir, marcar checklist) — no hay conversación libre ni intenciones
   nuevas sin tocar código. El SOS es una quinta acción, pero deliberadamente
   fuera del flujo de voz/LLM.
-- La sincronización P2P es a un solo salto (entre pares conectados
-  directamente, sea por wifi/DHT o por Bluetooth), no una red mesh
-  multi-salto — ver "Limitación honesta sobre sin señal" más arriba.
+- La sincronización P2P ya no es de un solo salto: con el relay
+  store-and-forward (`relay_outbox`), un mensaje puede viajar de mano en
+  mano por varios dispositivos sin que se hayan visto nunca directamente
+  — ver "Store-and-forward, no solo un salto" más arriba. Igual tiene
+  límites: no hay reenvío en segundo plano (la app tiene que estar
+  abierta en cada dispositivo intermedio para que actúe de mensajero) y
+  cada mensaje deja de propagarse a las 72hs de originado.
 - `ble-swarm`, el transporte Bluetooth para el caso de cero red compartida,
   está marcado `experimental` por sus propios autores (Holepunch); el
   alcance real de BLE es corto (~10-30m).
