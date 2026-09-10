@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Agente de Campo Offline",
+    "slug": "agente-de-campo-offline",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "scheme": "agentecampo",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "org.qvachackathon.agentedecampo",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Necesitamos el micrófono para transcribir tus notas de voz on-device, sin conexión a internet.",
+        "NSLocationWhenInUseUsageDescription": "Usamos tu ubicación para georreferenciar cada registro de campo."
+      }
+    },
+    "android": {
+      "package": "org.qvachackathon.agentedecampo",
+      "permissions": [
+        "RECORD_AUDIO",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "@qvac/sdk/expo-plugin",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.0"
+          },
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Usamos tu ubicación para georreferenciar cada registro de campo."
+        }
+      ]
+    ]
+  }
+}
