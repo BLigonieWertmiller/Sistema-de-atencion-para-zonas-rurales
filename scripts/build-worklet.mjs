@@ -14,10 +14,12 @@
  * Verificado a mano en este repo: `npx bare-pack --linked --host
  * android-arm64 --host android-arm --host android-x64 --host ios-arm64
  * --host ios-arm64-simulator p2p/worklet.js` resuelve el grafo completo
- * (hyperswarm, hyperdht, bare-rpc, b4a) y encuentra binarios `linked:` reales
- * para udx-native y sodium-native en los 5 hosts. `node
- * node_modules/react-native-bare-kit/android/link.mjs` y el equivalente de
- * ios/ copian esos binarios al proyecto nativo sin errores.
+ * (hyperswarm, hyperdht, ble-swarm, bare-bluetooth, hypercore-crypto,
+ * bare-rpc, b4a) y encuentra binarios `linked:` reales para udx-native,
+ * sodium-native, bare-bluetooth-android y bare-bluetooth-apple en los 5
+ * hosts. `node node_modules/react-native-bare-kit/android/link.mjs` y el
+ * equivalente de ios/ copian esos binarios (incluido el .jar/.dex de
+ * Android para BLE) al proyecto nativo sin errores.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -79,9 +79,10 @@ extremo — es que la cuadrilla se sincronice entre sí sin ningún servidor de
 por medio, ni siquiera para el caso más urgente: pedir ayuda.
 
 ```
-Peer A ──┐                                    ┌── Peer B
-         │   Hyperswarm (HyperDHT, @pears)     │
-         └──────────── swarm P2P ──────────────┘
+Peer A ──┐                                              ┌── Peer B
+         │  Hyperswarm (HyperDHT)  — necesita algo de red │
+         │  ble-swarm (Bluetooth LE) — cero red, ~10-30m  │
+         └──────────────────── swarm P2P ─────────────────┘
               topic = SHA-256("<código de cuadrilla>")
 
   botón SOS ──► worklet Bare (p2p/worklet.js) ──► gossip a un salto ──► worklet Bare ──► alerta en pantalla + voz
@@ -89,8 +90,16 @@ Peer A ──┐                                    ┌── Peer B
 ```
 
 - **Identificación del equipo:** todos los que cargan el mismo "código de
-  cuadrilla" (pantalla Bitácora) se unen al mismo *topic* de Hyperswarm — un
-  hash SHA-256 del código, nunca el código en texto plano viaja por la red.
+  cuadrilla" (pantalla Bitácora) se unen al mismo *topic* — un hash SHA-256
+  del código, nunca el código en texto plano viaja por la red — en **ambos
+  transportes a la vez**.
+- **Dos transportes, en paralelo, mismo protocolo:** Hyperswarm (HyperDHT)
+  para cuando hay algún camino de red (wifi local, o una ventana breve de
+  señal), y `ble-swarm` (Bluetooth LE, sobre `bare-bluetooth`) para el caso
+  límite real de "cero red compartida" — dos radios BLE viéndose
+  directamente, sin wifi ni datos de por medio. Los dos emiten el mismo tipo
+  de conexión cifrada (`NoiseSecretStream`), así que el resto del código
+  (gossip, dedup, UI) no distingue por qué radio llegó un mensaje.
 - **Qué se sincroniza:** notas, ítems de checklist y traducciones que cada
   uno generó, más las alertas SOS — a un salto (entre dispositivos
   conectados directamente, no como red mesh multi-salto) para mantener el
@@ -98,25 +107,28 @@ Peer A ──┐                                    ┌── Peer B
 - **Botón de SOS:** deliberadamente separado del flujo de voz — en una
   emergencia real no hay que depender de que un LLM interprete bien una
   frase dicha bajo estrés. Mantener presionado ~2s (como el SOS de un
-  celular) captura ubicación + hora, lo guarda localmente, y lo manda por el
-  swarm a cualquier par conectado. Si no hay pares conectados en ese
-  momento, la confirmación lo dice explícitamente ("Guardada localmente, sin
-  pares conectados") — nunca finge haber avisado a alguien si no lo hizo.
+  celular) captura ubicación + hora, lo guarda localmente, y lo manda por
+  **los dos transportes** a cualquier par conectado. Si no hay pares
+  conectados en ese momento, la confirmación lo dice explícitamente
+  ("Guardada localmente, sin pares conectados") — nunca finge haber avisado
+  a alguien si no lo hizo.
 - **Sin servidor, en ningún punto.** El descubrimiento de pares usa la DHT
-  pública de Hyperswarm/Pear (o bootstrap propio en red local); una vez
-  conectados, el enlace es directo entre los dos dispositivos.
+  pública de Hyperswarm/Pear (o bootstrap propio en red local) o el radio
+  BLE directamente; una vez conectados, el enlace es directo entre los dos
+  dispositivos.
 
 ### Cómo corre técnicamente (Bare, no React Native puro)
 
 `react-native-bare-kit` embebe un runtime **Bare** dentro de la app — el
 mismo runtime que usa `@qvac/sdk` para su propio motor de inferencia, así
-que la app ya traía esta pieza. Hyperswarm no corre en el hilo de JS de
-React Native (no puede: sus dependencias nativas — `udx-native` para UDP,
-`sodium-native` para criptografía — no son módulos de React Native), corre
+que la app ya traía esta pieza. Ni Hyperswarm ni `ble-swarm` corren en el
+hilo de JS de React Native (no pueden: sus dependencias nativas —
+`udx-native` para UDP, `sodium-native` para criptografía, `bare-bluetooth`
+para BLE central/periférico — no son módulos de React Native), corren
 dentro de ese runtime Bare, en `p2p/worklet.js`.
 
 ```
-p2p/worklet.js  (Hyperswarm, corre en Bare)
+p2p/worklet.js  (Hyperswarm + ble-swarm, corren juntos en Bare)
       │  bare-pack --linked --host android-* --host ios-*
       ▼
 src/p2p/workletBundle.generated.ts   (bundle embebido en base64, ya versionado)
@@ -128,51 +140,61 @@ src/hooks/usePeerSync.ts  (valida con zod, escribe en SQLite, actualiza la UI)
 ```
 
 **Esto no quedó en el papel: se verificó en este repo.** Se instalaron de
-verdad `hyperswarm`, `bare-rpc`, `react-native-bare-kit`, `bare-pack` y
-`bare-link`, y se corrió el pipeline completo:
+verdad `hyperswarm`, `ble-swarm`, `hypercore-crypto`, `bare-rpc`,
+`react-native-bare-kit`, `bare-pack` y `bare-link`, y se corrió el pipeline
+completo:
 
 ```bash
 npx bare-pack --linked \
   --host android-arm64 --host android-arm --host android-x64 \
   --host ios-arm64 --host ios-arm64-simulator \
   -o worklet.bundle p2p/worklet.js
-# ✔ resuelve todo el grafo de módulos (hyperswarm, hyperdht, bare-rpc, b4a)
-# ✔ encuentra binarios linked: reales para udx-native y sodium-native
-#   en los 5 hosts (Android arm64/arm/x64, iOS device + simulador)
+# ✔ resuelve todo el grafo de módulos (hyperswarm, hyperdht, ble-swarm,
+#   bare-bluetooth, hypercore-crypto, bare-rpc, b4a)
+# ✔ encuentra binarios linked: reales para udx-native, sodium-native,
+#   bare-bluetooth-android y bare-bluetooth-apple en los 5 hosts
+#   (Android arm64/arm/x64, iOS device + simulador)
 
 node node_modules/react-native-bare-kit/android/link.mjs
 node node_modules/react-native-bare-kit/ios/link.mjs
-# ✔ copia esos binarios (.so por ABI / .xcframework) al proyecto nativo,
-#   sin errores
+# ✔ copia esos binarios (.so por ABI, .jar/.dex de Android para BLE,
+#   .xcframework de iOS) al proyecto nativo, sin errores
 ```
 
 Lo único que **no** se pudo verificar en este entorno (sandbox sin
 Android/iOS SDK ni dispositivo) es la compilación nativa final y el
-descubrimiento de peers real. `npm run build:worklet` ya corrió y el bundle
-resultante está commiteado en `src/p2p/workletBundle.generated.ts`, así que
-no hace falta tener `bare-pack` instalado para levantar la app — solo si se
-edita `p2p/worklet.js`.
+descubrimiento de peers real —por wifi/DHT o por Bluetooth—. `npm run
+build:worklet` ya corrió y el bundle resultante está commiteado en
+`src/p2p/workletBundle.generated.ts`, así que no hace falta tener
+`bare-pack` instalado para levantar la app — solo si se edita
+`p2p/worklet.js`.
+
+### Qué cubre cada transporte
+
+| | Hyperswarm (HyperDHT) | `ble-swarm` (Bluetooth LE) |
+|---|---|---|
+| Requiere | Algún camino de red (wifi local o una ventana breve de señal) | Nada — dos radios BLE viéndose |
+| Alcance | El de esa red (LAN completa, o internet si hay bootstrap) | Line-of-sight, ~10-30m típico |
+| Velocidad | Rápida, sin límite práctico para estos mensajes | Más lenta (BLE), de sobra para JSON chico |
+| Estado upstream | Estable, en producción en el ecosistema Pear | Marcado `experimental` por Holepunch |
+
+Ambos se intentan siempre en paralelo — si uno no encuentra pares, el otro
+puede igual. Si el hardware no tiene BLE o la plataforma no está soportada
+(`bare-bluetooth` cubre macOS 13+, iOS y Android), `ble-swarm` reporta
+`unsupported` y sigue sin romper nada; Hyperswarm sigue funcionando igual.
 
 ### Limitación honesta sobre "sin señal"
 
-Hyperswarm descubre pares vía HyperDHT, que por defecto necesita algún
-camino de red hasta sus nodos de bootstrap (en general, internet). Dos
-teléfonos con **cero** red entre sí (sin wifi compartido, sin datos) no van
-a encontrarse solo con esto. Lo que sí funciona sin datos móviles ni
-señal celular:
+Con **solo** Hyperswarm, dos teléfonos sin wifi compartido y sin datos no
+se hubieran encontrado — por eso se sumó `ble-swarm`, que sí cubre ese caso
+límite (cero red, Bluetooth directo). Lo que queda como limitación real:
 
-- Ambos en la misma red wifi local (el hotspot de uno de los propios
-  teléfonos de la cuadrilla, o un router de campo) — cero infraestructura
-  externa.
-- Una ventana breve de señal para el *handshake* inicial, después de la cual
-  la conexión es directa.
-
-Para el caso de **cero red posible** (sin wifi compartido tampoco), la
-propuesta original menciona `ble-swarm` (Bluetooth) como "dirección bonus
-experimental" — no se implementó en este MVP porque agregar roles
-BLE central/periférico nativos, sin poder testear en hardware, era un
-riesgo mucho mayor que el resto del proyecto. Queda documentado como
-siguiente paso.
+- El alcance de BLE es mucho más corto que el de una red wifi (decenas de
+  metros, no todo el predio).
+- `ble-swarm` está marcado `experimental` por sus propios autores (Holepunch)
+  — la API puede cambiar, y no se probó en hardware real en este entorno.
+- Sigue siendo sincronización a un salto (ver el punto de arriba), en
+  cualquiera de los dos transportes.
 
 ## Seguridad
 
@@ -215,9 +237,10 @@ Puntos revisados y su estado:
   nada de eso sale del teléfono salvo que el usuario comparta explícitamente
   el PDF del reporte con el botón de compartir (acción manual del usuario,
   no automática de la app).
-- **Permisos mínimos.** Solo se piden micrófono y ubicación en primer plano
-  (`WhenInUse`, no `Always`/background). No se pide ni se usa ningún permiso
-  adicional.
+- **Permisos mínimos, todos justificados.** Micrófono (STT), ubicación en
+  primer plano (`WhenInUse`, no `Always`/background, para geoetiquetar), y
+  Bluetooth/red local (para el swarm P2P con la cuadrilla). Ninguno se pide
+  para telemetría ni para nada que no esté descrito en este README.
 - **Sin secretos ni credenciales en el repo.** No hay API keys, tokens ni
   URLs de servicios propios hardcodeadas en el código (verificado por grep).
 - **Modelo de confianza del P2P (Pears).** El código de cuadrilla es la
@@ -253,9 +276,10 @@ proyecto anterior):
 - **`expo-haptics`** — feedback táctil del botón de SOS.
 - **`expo-crypto`** — hash SHA-256 del código de cuadrilla → *topic* de Hyperswarm.
 - **Pear / Holepunch stack** — `react-native-bare-kit` (runtime Bare
-  embebido), `hyperswarm` + `bare-rpc` + `b4a` (P2P y el protocolo con el
-  worklet), `bare-pack` + `bare-link` (empaquetado y linkeo nativo de esos
-  módulos para Android/iOS) — ver la sección de P2P más arriba.
+  embebido), `hyperswarm` + `ble-swarm` + `hypercore-crypto` + `bare-rpc` +
+  `b4a` (los dos transportes P2P y el protocolo con el worklet), `bare-pack`
+  + `bare-link` (empaquetado y linkeo nativo de esos módulos, incluido BLE,
+  para Android/iOS) — ver la sección de P2P más arriba.
 
 ## Cómo correrlo
 
@@ -302,7 +326,7 @@ pipeline (SQLite → reporte → PDF) funciona.
 ## Estructura del código
 
 ```
-p2p/worklet.js             Código P2P (Hyperswarm) que corre en el runtime Bare
+p2p/worklet.js             Código P2P (Hyperswarm + ble-swarm) que corre en el runtime Bare
 scripts/build-worklet.mjs  Empaqueta p2p/worklet.js con bare-pack -> bundle embebido
 
 src/
@@ -340,17 +364,19 @@ src/
   nuevas sin tocar código. El SOS es una quinta acción, pero deliberadamente
   fuera del flujo de voz/LLM.
 - La sincronización P2P es a un solo salto (entre pares conectados
-  directamente), no una red mesh multi-salto — ver "Limitación honesta sobre
-  sin señal" más arriba para cuándo funciona sin celular y cuándo no.
-- El bonus `ble-swarm` (Bluetooth, para el caso de cero red compartida) no
-  se implementó — ver esa misma sección.
+  directamente, sea por wifi/DHT o por Bluetooth), no una red mesh
+  multi-salto — ver "Limitación honesta sobre sin señal" más arriba.
+- `ble-swarm`, el transporte Bluetooth para el caso de cero red compartida,
+  está marcado `experimental` por sus propios autores (Holepunch); el
+  alcance real de BLE es corto (~10-30m).
 - No hay autenticación criptográfica de identidad entre pares del swarm más
   allá de compartir el código de cuadrilla — ver la nota de seguridad
   correspondiente.
 - No se probó en un dispositivo físico dentro de este entorno de desarrollo
-  (sandbox sin Android/iOS SDK, sin emulador, sin micrófono). Lo que sí se
-  verificó a mano en este repo: `tsc --noEmit` limpio contra los tipos
-  reales de `@qvac/sdk` 0.19.0 y del stack de Pear/Holepunch, y el pipeline
-  completo de `bare-pack --linked` + `bare-link` corriendo de punta a punta
-  (ver la sección de P2P). Falta la compilación nativa final y la prueba de
-  descubrimiento de pares en hardware real antes del hackathon.
+  (sandbox sin Android/iOS SDK, sin emulador, sin micrófono, sin radio BLE).
+  Lo que sí se verificó a mano en este repo: `tsc --noEmit` limpio contra
+  los tipos reales de `@qvac/sdk` 0.19.0 y del stack de Pear/Holepunch, y el
+  pipeline completo de `bare-pack --linked` + `bare-link` corriendo de
+  punta a punta para ambos transportes P2P (ver la sección correspondiente).
+  Falta la compilación nativa final y la prueba de descubrimiento de pares
+  en hardware real antes del hackathon.
