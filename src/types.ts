@@ -13,7 +13,7 @@ export interface ClassifiedIntent extends IntentResult {
   source: 'llm' | 'reglas';
 }
 
-export type LogEntryType = 'nota' | 'traduccion' | 'checklist' | 'reporte';
+export type LogEntryType = 'nota' | 'traduccion' | 'checklist' | 'reporte' | 'sos';
 
 export interface LogEntry {
   id: number;

@@ -26,6 +26,14 @@ function getDb(): Promise<SQLite.SQLiteDatabase> {
           done INTEGER NOT NULL DEFAULT 0,
           updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS received_peer_messages (
+          dedup_key TEXT PRIMARY KEY,
+          received_at TEXT NOT NULL
+        );
       `);
       return db;
     });
@@ -124,4 +132,42 @@ export async function getChecklistItems(): Promise<ChecklistItem[]> {
   );
 
   return rows.map((row) => ({ id: row.id, label: row.label, done: row.done === 1, updatedAt: row.updated_at }));
+}
+
+export async function getSetting(key: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM settings WHERE key = ?', key);
+  return row?.value ?? null;
+}
+
+export async function setSetting(key: string, value: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    key,
+    value
+  );
+}
+
+/**
+ * Dedup de mensajes recibidos por P2P: como el gossip entre pares es a un
+ * solo salto y sin acuse de recibo, un mismo mensaje puede llegar más de
+ * una vez (reconexión, reenvío). `dedupKey` identifica el mensaje de forma
+ * estable (ver `src/p2p/*` para cómo se arma); esta tabla evita duplicar la
+ * entrada de bitácora correspondiente.
+ */
+export async function wasAlreadyReceived(dedupKey: string): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.getFirstAsync('SELECT 1 FROM received_peer_messages WHERE dedup_key = ?', dedupKey);
+  return row != null;
+}
+
+export async function markReceived(dedupKey: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'INSERT OR IGNORE INTO received_peer_messages (dedup_key, received_at) VALUES (?, ?)',
+    dedupKey,
+    new Date().toISOString()
+  );
 }

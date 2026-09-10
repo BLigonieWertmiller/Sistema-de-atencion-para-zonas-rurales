@@ -18,6 +18,7 @@ Un trabajador de campo necesita, con las manos ocupadas y sin señal:
 2. Generar el reporte del día para entregar cuando vuelva a tener conexión.
 3. Traducir una frase para comunicarse con un proveedor o colega.
 4. Marcar un ítem de una checklist como revisado.
+5. Pedir ayuda si algo sale mal — sin señal celular, sin depender de que alguien esté mirando el chat.
 
 **Por qué la nube no es una opción acá:** conectividad intermitente y zonas
 sin señal son la norma en este tipo de trabajo, no la excepción. Una app que
@@ -71,6 +72,108 @@ de la primera carga y usando la app con normalidad.
 Todo el resto (SQLite, ubicación, generación de PDF, UI) es lógica de app
 corriendo localmente, sin ningún componente de red.
 
+## P2P entre pares (Pears) y botón de SOS
+
+El bonus del hackathon — "donde la nube no debería llegar" llevado al
+extremo — es que la cuadrilla se sincronice entre sí sin ningún servidor de
+por medio, ni siquiera para el caso más urgente: pedir ayuda.
+
+```
+Peer A ──┐                                    ┌── Peer B
+         │   Hyperswarm (HyperDHT, @pears)     │
+         └──────────── swarm P2P ──────────────┘
+              topic = SHA-256("<código de cuadrilla>")
+
+  botón SOS ──► worklet Bare (p2p/worklet.js) ──► gossip a un salto ──► worklet Bare ──► alerta en pantalla + voz
+  nota de voz ─┘                                                    └─ bitácora del compañero
+```
+
+- **Identificación del equipo:** todos los que cargan el mismo "código de
+  cuadrilla" (pantalla Bitácora) se unen al mismo *topic* de Hyperswarm — un
+  hash SHA-256 del código, nunca el código en texto plano viaja por la red.
+- **Qué se sincroniza:** notas, ítems de checklist y traducciones que cada
+  uno generó, más las alertas SOS — a un salto (entre dispositivos
+  conectados directamente, no como red mesh multi-salto) para mantener el
+  protocolo simple y auditable.
+- **Botón de SOS:** deliberadamente separado del flujo de voz — en una
+  emergencia real no hay que depender de que un LLM interprete bien una
+  frase dicha bajo estrés. Mantener presionado ~2s (como el SOS de un
+  celular) captura ubicación + hora, lo guarda localmente, y lo manda por el
+  swarm a cualquier par conectado. Si no hay pares conectados en ese
+  momento, la confirmación lo dice explícitamente ("Guardada localmente, sin
+  pares conectados") — nunca finge haber avisado a alguien si no lo hizo.
+- **Sin servidor, en ningún punto.** El descubrimiento de pares usa la DHT
+  pública de Hyperswarm/Pear (o bootstrap propio en red local); una vez
+  conectados, el enlace es directo entre los dos dispositivos.
+
+### Cómo corre técnicamente (Bare, no React Native puro)
+
+`react-native-bare-kit` embebe un runtime **Bare** dentro de la app — el
+mismo runtime que usa `@qvac/sdk` para su propio motor de inferencia, así
+que la app ya traía esta pieza. Hyperswarm no corre en el hilo de JS de
+React Native (no puede: sus dependencias nativas — `udx-native` para UDP,
+`sodium-native` para criptografía — no son módulos de React Native), corre
+dentro de ese runtime Bare, en `p2p/worklet.js`.
+
+```
+p2p/worklet.js  (Hyperswarm, corre en Bare)
+      │  bare-pack --linked --host android-* --host ios-*
+      ▼
+src/p2p/workletBundle.generated.ts   (bundle embebido en base64, ya versionado)
+      │  Worklet.start('/app.bundle', bytes)   (react-native-bare-kit)
+      ▼
+src/p2p/peerSync.ts  (puente RN ⇄ worklet, por bare-rpc sobre worklet.IPC)
+      ▼
+src/hooks/usePeerSync.ts  (valida con zod, escribe en SQLite, actualiza la UI)
+```
+
+**Esto no quedó en el papel: se verificó en este repo.** Se instalaron de
+verdad `hyperswarm`, `bare-rpc`, `react-native-bare-kit`, `bare-pack` y
+`bare-link`, y se corrió el pipeline completo:
+
+```bash
+npx bare-pack --linked \
+  --host android-arm64 --host android-arm --host android-x64 \
+  --host ios-arm64 --host ios-arm64-simulator \
+  -o worklet.bundle p2p/worklet.js
+# ✔ resuelve todo el grafo de módulos (hyperswarm, hyperdht, bare-rpc, b4a)
+# ✔ encuentra binarios linked: reales para udx-native y sodium-native
+#   en los 5 hosts (Android arm64/arm/x64, iOS device + simulador)
+
+node node_modules/react-native-bare-kit/android/link.mjs
+node node_modules/react-native-bare-kit/ios/link.mjs
+# ✔ copia esos binarios (.so por ABI / .xcframework) al proyecto nativo,
+#   sin errores
+```
+
+Lo único que **no** se pudo verificar en este entorno (sandbox sin
+Android/iOS SDK ni dispositivo) es la compilación nativa final y el
+descubrimiento de peers real. `npm run build:worklet` ya corrió y el bundle
+resultante está commiteado en `src/p2p/workletBundle.generated.ts`, así que
+no hace falta tener `bare-pack` instalado para levantar la app — solo si se
+edita `p2p/worklet.js`.
+
+### Limitación honesta sobre "sin señal"
+
+Hyperswarm descubre pares vía HyperDHT, que por defecto necesita algún
+camino de red hasta sus nodos de bootstrap (en general, internet). Dos
+teléfonos con **cero** red entre sí (sin wifi compartido, sin datos) no van
+a encontrarse solo con esto. Lo que sí funciona sin datos móviles ni
+señal celular:
+
+- Ambos en la misma red wifi local (el hotspot de uno de los propios
+  teléfonos de la cuadrilla, o un router de campo) — cero infraestructura
+  externa.
+- Una ventana breve de señal para el *handshake* inicial, después de la cual
+  la conexión es directa.
+
+Para el caso de **cero red posible** (sin wifi compartido tampoco), la
+propuesta original menciona `ble-swarm` (Bluetooth) como "dirección bonus
+experimental" — no se implementó en este MVP porque agregar roles
+BLE central/periférico nativos, sin poder testear en hardware, era un
+riesgo mucho mayor que el resto del proyecto. Queda documentado como
+siguiente paso.
+
 ## Seguridad
 
 Auditoría hecha sobre el código de este repo (no solo diseño en el papel).
@@ -117,6 +220,19 @@ Puntos revisados y su estado:
   adicional.
 - **Sin secretos ni credenciales en el repo.** No hay API keys, tokens ni
   URLs de servicios propios hardcodeadas en el código (verificado por grep).
+- **Modelo de confianza del P2P (Pears).** El código de cuadrilla es la
+  única puerta de entrada al swarm — nunca viaja en texto plano (se manda un
+  hash SHA-256 como *topic*), pero no hay autenticación criptográfica de
+  identidad entre pares: cualquiera con el código puede unirse y mandar
+  mensajes con cualquier `deviceName`. Por diseño, esto se trata como
+  entrada no confiable: todo mensaje recibido de un par se valida con zod
+  contra un schema estricto (`src/p2p/protocol.ts`, tipos y longitudes
+  acotadas) *antes* de tocar la base de datos o la UI — un payload que no
+  matchea se descarta y se loguea, nunca se guarda a medias. El peor caso de
+  un código de cuadrilla filtrado es que alguien vea o falsifique
+  notas/alertas de esa cuadrilla, no ejecución de código ni acceso a otros
+  datos del dispositivo. Recomendación operativa: tratar el código como una
+  contraseña compartida y rotarlo por turno o misión.
 
 ## Base preexistente utilizada (declarado explícitamente)
 
@@ -134,6 +250,12 @@ proyecto anterior):
 - **`expo-speech`** — voz del sistema como respaldo si el modelo TTS on-device
   todavía no terminó de cargar (para que la confirmación hablada nunca falle
   en una demo).
+- **`expo-haptics`** — feedback táctil del botón de SOS.
+- **`expo-crypto`** — hash SHA-256 del código de cuadrilla → *topic* de Hyperswarm.
+- **Pear / Holepunch stack** — `react-native-bare-kit` (runtime Bare
+  embebido), `hyperswarm` + `bare-rpc` + `b4a` (P2P y el protocolo con el
+  worklet), `bare-pack` + `bare-link` (empaquetado y linkeo nativo de esos
+  módulos para Android/iOS) — ver la sección de P2P más arriba.
 
 ## Cómo correrlo
 
@@ -144,6 +266,10 @@ proyecto anterior):
 ```bash
 npm install
 
+# linkea los binarios nativos de Hyperswarm (udx-native, sodium-native) al
+# proyecto de react-native-bare-kit — correrlo de nuevo si cambian esas deps
+npm run link:bare
+
 # genera los proyectos nativos ios/ y android/
 npx expo prebuild
 
@@ -152,6 +278,13 @@ npx expo run:android
 
 # iOS (requiere Xcode, solo macOS)
 npx expo run:ios
+```
+
+Si se edita `p2p/worklet.js` (el código P2P que corre en Bare), hay que
+regenerar el bundle embebido antes de recompilar:
+
+```bash
+npm run build:worklet
 ```
 
 La primera vez que se usa cada función (STT, LLM, TTS) la app descarga el
@@ -169,6 +302,9 @@ pipeline (SQLite → reporte → PDF) funciona.
 ## Estructura del código
 
 ```
+p2p/worklet.js             Código P2P (Hyperswarm) que corre en el runtime Bare
+scripts/build-worklet.mjs  Empaqueta p2p/worklet.js con bare-pack -> bundle embebido
+
 src/
   constants/models.ts    Modelos QVAC usados (LLM, STT, TTS)
   agent/
@@ -176,29 +312,45 @@ src/
     intentEngine.ts        Clasificación de intención con el LLM on-device
     rules.ts                Fallback por palabras clave (sin modelo)
     actions.ts               Ejecuta la acción concreta de cada intención
+    sanitize.ts               Saneamiento de texto libre (defensa en profundidad)
   services/
     qvacModels.ts          Carga/descarga de los 3 modelos on-device
     audioRecorder.ts        Grabación de voz (expo-av)
     stt.ts                    Transcripción (Whisper on-device)
     tts.ts                     Confirmación hablada (Supertonic on-device + fallback)
     translate.ts               Traducción (reusa el LLM ya cargado)
-    database.ts                Bitácora y checklist en SQLite
+    database.ts                Bitácora, checklist, settings y dedup P2P en SQLite
     location.ts                Geoetiquetado
     report.ts                    Reporte del día (texto + PDF)
-  hooks/useFieldAgent.ts   Orquesta el loop completo (estado de la UI)
-  screens/, components/    UI voice-first, minimalista
+    identity.ts                   Id de dispositivo, nombre y código de cuadrilla
+  p2p/
+    protocol.ts             Contrato RN ⇄ worklet + schemas zod de validación
+    peerSync.ts               Puente RN ⇄ worklet Bare (bare-rpc sobre worklet.IPC)
+    workletBundle.generated.ts  Bundle de p2p/worklet.js embebido (generado, versionado)
+  hooks/
+    useFieldAgent.ts        Orquesta el loop de voz completo (estado de la UI)
+    usePeerSync.ts            Conecta al swarm, valida y refleja lo que llega de pares
+  screens/, components/    UI voice-first, minimalista (incluye SosButton)
 ```
 
 ## Limitaciones conocidas (MVP de 48hs)
 
-- Las 4 intenciones son fijas (registrar nota, generar reporte, traducir,
-  marcar checklist) — no hay conversación libre ni intenciones nuevas sin
-  tocar código.
-- El bonus de sincronización P2P entre pares (Pears) descrito en la
-  propuesta original no está implementado en este MVP; queda como próximo
-  paso si el proyecto avanza más allá del hackathon.
+- Las 4 intenciones de voz son fijas (registrar nota, generar reporte,
+  traducir, marcar checklist) — no hay conversación libre ni intenciones
+  nuevas sin tocar código. El SOS es una quinta acción, pero deliberadamente
+  fuera del flujo de voz/LLM.
+- La sincronización P2P es a un solo salto (entre pares conectados
+  directamente), no una red mesh multi-salto — ver "Limitación honesta sobre
+  sin señal" más arriba para cuándo funciona sin celular y cuándo no.
+- El bonus `ble-swarm` (Bluetooth, para el caso de cero red compartida) no
+  se implementó — ver esa misma sección.
+- No hay autenticación criptográfica de identidad entre pares del swarm más
+  allá de compartir el código de cuadrilla — ver la nota de seguridad
+  correspondiente.
 - No se probó en un dispositivo físico dentro de este entorno de desarrollo
-  (sandbox sin build nativo ni micrófono); el código fue validado contra los
-  tipos y ejemplos oficiales de `@qvac/sdk` 0.19.0 (`tsc --noEmit` limpio) y
-  debería compilarse y ejecutarse con `expo prebuild` + `expo run:android`/`run:ios`
-  en una máquina con las herramientas nativas instaladas.
+  (sandbox sin Android/iOS SDK, sin emulador, sin micrófono). Lo que sí se
+  verificó a mano en este repo: `tsc --noEmit` limpio contra los tipos
+  reales de `@qvac/sdk` 0.19.0 y del stack de Pear/Holepunch, y el pipeline
+  completo de `bare-pack --linked` + `bare-link` corriendo de punta a punta
+  (ver la sección de P2P). Falta la compilación nativa final y la prueba de
+  descubrimiento de pares en hardware real antes del hackathon.

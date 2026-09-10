@@ -8,7 +8,8 @@ const TYPE_ICON: Record<LogEntry['type'], string> = {
   nota: '📝',
   traduccion: '🌐',
   checklist: '✅',
-  reporte: '📄'
+  reporte: '📄',
+  sos: '🆘'
 };
 
 export function EntryRow({ entry }: { entry: LogEntry }) {
@@ -21,7 +22,7 @@ export function EntryRow({ entry }: { entry: LogEntry }) {
     <View style={styles.row}>
       <Text style={styles.icon}>{TYPE_ICON[entry.type]}</Text>
       <View style={styles.content}>
-        <Text style={styles.text}>{entry.text}</Text>
+        <Text style={[styles.text, entry.type === 'sos' && styles.sosText]}>{entry.text}</Text>
         <Text style={styles.meta}>
           {time}
           {entry.latitude != null && entry.longitude != null ? ' · con ubicación' : ''}
@@ -49,6 +50,10 @@ const styles = StyleSheet.create({
   text: {
     color: theme.text,
     fontSize: 16
+  },
+  sosText: {
+    color: theme.danger,
+    fontWeight: '700'
   },
   meta: {
     color: theme.textMuted,

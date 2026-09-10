@@ -12,7 +12,8 @@
       "bundleIdentifier": "org.qvachackathon.agentedecampo",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Necesitamos el micrófono para transcribir tus notas de voz on-device, sin conexión a internet.",
-        "NSLocationWhenInUseUsageDescription": "Usamos tu ubicación para georreferenciar cada registro de campo."
+        "NSLocationWhenInUseUsageDescription": "Usamos tu ubicación para georreferenciar cada registro de campo.",
+        "NSLocalNetworkUsageDescription": "Se usa para sincronizar la bitácora y las alertas SOS con otros dispositivos de la cuadrilla cerca tuyo, sin depender de internet."
       }
     },
     "android": {

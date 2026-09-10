@@ -25,7 +25,7 @@ export interface FieldAgentState {
   generateReportNow: () => Promise<void>;
 }
 
-export function useFieldAgent(): FieldAgentState {
+export function useFieldAgent(onEntryCreated?: (entry: LogEntry) => void): FieldAgentState {
   const [phase, setPhase] = useState<AgentPhase>('inactivo');
   const [modelsReady, setModelsReady] = useState(false);
   const [downloadLabel, setDownloadLabel] = useState<string | null>(null);
@@ -111,6 +111,7 @@ export function useFieldAgent(): FieldAgentState {
 
       setLastConfirmation(result.confirmation);
       await refreshEntries();
+      if (result.entry) onEntryCreated?.(result.entry);
 
       setPhase('confirmando');
       await speakConfirmation(models?.ttsModelId ?? null, result.confirmation);
@@ -120,7 +121,7 @@ export function useFieldAgent(): FieldAgentState {
       setErrorMessage('Hubo un problema procesando el comando. Probá de nuevo.');
       setPhase('error');
     }
-  }, [refreshEntries]);
+  }, [refreshEntries, onEntryCreated]);
 
   const generateReportNow = useCallback(async () => {
     try {

@@ -7,7 +7,8 @@ const TYPE_LABELS: Record<LogEntry['type'], string> = {
   nota: 'Nota',
   traduccion: 'Traducción',
   checklist: 'Checklist',
-  reporte: 'Reporte'
+  reporte: 'Reporte',
+  sos: 'SOS'
 };
 
 function formatTime(iso: string): string {
