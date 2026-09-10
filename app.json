@@ -17,11 +17,7 @@
     },
     "android": {
       "package": "org.qvachackathon.agentedecampo",
-      "permissions": [
-        "RECORD_AUDIO",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
-      ]
+      "permissions": ["RECORD_AUDIO"]
     },
     "plugins": [
       "@qvac/sdk/expo-plugin",

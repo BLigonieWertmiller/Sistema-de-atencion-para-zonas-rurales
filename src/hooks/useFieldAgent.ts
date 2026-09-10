@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { runIntentAction } from '../agent/actions';
 import { classifyIntent } from '../agent/intentEngine';
+import { MAX_TRANSCRIPT_LENGTH } from '../agent/sanitize';
 import { AudioRecorder } from '../services/audioRecorder';
 import { getTodayLogEntries } from '../services/database';
 import { loadAgentModels, unloadAgentModels, type LoadedModels } from '../services/qvacModels';
@@ -94,9 +95,8 @@ export function useFieldAgent(): FieldAgentState {
 
     try {
       setPhase('transcribiendo');
-      const transcript = models
-        ? await transcribeAudioFile(models.sttModelId, audioUri)
-        : '';
+      const rawTranscript = models ? await transcribeAudioFile(models.sttModelId, audioUri) : '';
+      const transcript = rawTranscript.trim().slice(0, MAX_TRANSCRIPT_LENGTH);
 
       if (!transcript) {
         setErrorMessage('No se entendió el audio, probá de nuevo.');

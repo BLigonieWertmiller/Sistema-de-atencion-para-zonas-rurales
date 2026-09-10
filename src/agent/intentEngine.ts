@@ -2,7 +2,22 @@ import { completion } from '@qvac/sdk';
 
 import type { ClassifiedIntent } from '../types';
 import { classifyByRules } from './rules';
-import { AGENT_SYSTEM_PROMPT, INTENT_JSON_SCHEMA, intentResultSchema } from './schema';
+import { sanitizeShortField, sanitizeText } from './sanitize';
+import { AGENT_SYSTEM_PROMPT, INTENT_JSON_SCHEMA, intentResultSchema, type IntentResult } from './schema';
+
+/**
+ * Acota y limpia los campos de texto libre de una intención ya clasificada,
+ * sea que haya venido del LLM o del fallback por reglas — ver
+ * `sanitize.ts` para el porqué.
+ */
+function sanitizeIntentResult(result: IntentResult): IntentResult {
+  return {
+    ...result,
+    texto: sanitizeText(result.texto),
+    idioma_destino: sanitizeShortField(result.idioma_destino),
+    item_checklist: sanitizeShortField(result.item_checklist)
+  };
+}
 
 /**
  * Interpreta la transcripción con el LLM chico corriendo on-device
@@ -19,7 +34,7 @@ export async function classifyIntent(
   transcript: string
 ): Promise<ClassifiedIntent> {
   if (!llmModelId) {
-    return { ...classifyByRules(transcript), source: 'reglas' };
+    return { ...sanitizeIntentResult(classifyByRules(transcript)), source: 'reglas' };
   }
 
   try {
@@ -27,6 +42,10 @@ export async function classifyIntent(
       modelId: llmModelId,
       history: [
         { role: 'system', content: AGENT_SYSTEM_PROMPT },
+        // El transcript del usuario viaja como mensaje 'user' separado, nunca
+        // interpolado dentro del system prompt, para que quede claro para el
+        // modelo (y para cualquier lector del código) dónde termina la
+        // instrucción y dónde empieza el dato no confiable.
         { role: 'user', content: transcript }
       ],
       stream: false,
@@ -39,9 +58,9 @@ export async function classifyIntent(
     const raw = await run.text;
     const parsed = intentResultSchema.parse(JSON.parse(raw.trim()));
 
-    return { ...parsed, source: 'llm' };
+    return { ...sanitizeIntentResult(parsed), source: 'llm' };
   } catch (error) {
     console.warn('Clasificación con LLM on-device falló, usando reglas:', error);
-    return { ...classifyByRules(transcript), source: 'reglas' };
+    return { ...sanitizeIntentResult(classifyByRules(transcript)), source: 'reglas' };
   }
 }

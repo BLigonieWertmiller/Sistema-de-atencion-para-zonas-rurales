@@ -71,6 +71,53 @@ de la primera carga y usando la app con normalidad.
 Todo el resto (SQLite, ubicación, generación de PDF, UI) es lógica de app
 corriendo localmente, sin ningún componente de red.
 
+## Seguridad
+
+Auditoría hecha sobre el código de este repo (no solo diseño en el papel).
+Puntos revisados y su estado:
+
+- **Ninguna API expuesta.** La app no levanta ningún servidor, socket ni
+  endpoint HTTP; no hay `fetch`/`XMLHttpRequest`/`axios`/WebSocket en todo
+  `src/` (verificado por grep, no queda ningún resultado). El único tráfico
+  de red posible en toda la app es el que hace `@qvac/sdk` internamente para
+  descargar el *peso* de un modelo la primera vez — nunca para ejecutar una
+  inferencia. El permiso `INTERNET` que trae cualquier proyecto React
+  Native por plantilla no equivale a tener una API expuesta: nadie puede
+  conectarse *hacia* el dispositivo, la app solo podría —si quisiera—
+  conectarse hacia afuera, y no lo hace en ningún camino de código.
+- **Resistencia a prompt injection en el agente.** El campo `intent` de la
+  salida del LLM está restringido por gramática (`responseFormat:
+  json_schema` se compila a GBNF en llama.cpp) a los 4 valores fijos — esto
+  se aplica a nivel de token durante la generación, no depende de que el
+  modelo "obedezca": no hay ninguna secuencia de texto hablado que pueda
+  hacerlo devolver una intención fuera de esa lista o salirse del JSON.
+  Además, el system prompt (`src/agent/schema.ts`) le indica explícitamente
+  al modelo que la transcripción del usuario es un dato a clasificar, nunca
+  una instrucción, como defensa en profundidad adicional. Los campos de
+  texto libre que sí puede llenar el modelo (`texto`, `idioma_destino`,
+  `item_checklist`) se sanean y acotan en longitud
+  (`src/agent/sanitize.ts`) antes de tocar cualquier acción — y ninguno de
+  esos campos controla código, SQL ni rutas de archivo, así que el peor
+  resultado posible de una frase adversarial es un registro con texto raro,
+  no una acción no autorizada.
+- **Sin inyección SQL.** Todas las consultas a SQLite
+  (`src/services/database.ts`) usan parámetros con `?`, nunca concatenación
+  de texto del usuario dentro del SQL.
+- **Sin inyección HTML/XSS en el reporte.** El texto del reporte se escapa
+  (`escapeHtml` en `src/services/report.ts`) antes de insertarse en el HTML
+  que `expo-print` convierte a PDF, así que una nota con `<script>` u otro
+  markup no puede alterar el documento generado.
+- **Datos locales por defecto.** La bitácora vive en SQLite en el
+  dispositivo y la ubicación se usa solo para geoetiquetar cada registro;
+  nada de eso sale del teléfono salvo que el usuario comparta explícitamente
+  el PDF del reporte con el botón de compartir (acción manual del usuario,
+  no automática de la app).
+- **Permisos mínimos.** Solo se piden micrófono y ubicación en primer plano
+  (`WhenInUse`, no `Always`/background). No se pide ni se usa ningún permiso
+  adicional.
+- **Sin secretos ni credenciales en el repo.** No hay API keys, tokens ni
+  URLs de servicios propios hardcodeadas en el código (verificado por grep).
+
 ## Base preexistente utilizada (declarado explícitamente)
 
 Este proyecto se armó desde cero para el hackathon, sobre las siguientes
