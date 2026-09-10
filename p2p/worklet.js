@@ -40,11 +40,13 @@ const b4a = require('b4a')
 // PROTOCOLO RN -> worklet (comandos por número, ver src/p2p/protocol.ts)
 const CMD_JOIN = 1 // data: { topicHex }
 const CMD_LEAVE = 2 // sin data
-const CMD_BROADCAST = 3 // data: { type: 'sos' | 'entry', payload }
+const CMD_BROADCAST = 3 // data: { type: 'sos' | 'entry' | 'checkin', payload }
 
 // PROTOCOLO worklet -> RN (mismos números, respuesta a request, o notificación)
 const EVT_PEER_COUNT = 10 // data: { count }
-const EVT_MESSAGE = 11 // data: { type: 'sos' | 'entry', payload, fromPeer }
+const EVT_MESSAGE = 11 // data: { type: 'sos' | 'entry' | 'checkin', payload, fromPeer }
+
+const MESSAGE_TYPES = new Set(['sos', 'entry', 'checkin'])
 
 const { IPC } = BareKit
 
@@ -91,7 +93,7 @@ function attachPeer(socket, remotePublicKey) {
       if (!line) continue
       try {
         const message = JSON.parse(line)
-        if (message && (message.type === 'sos' || message.type === 'entry')) {
+        if (message && MESSAGE_TYPES.has(message.type)) {
           send(EVT_MESSAGE, { type: message.type, payload: message.payload, fromPeer })
         }
       } catch {

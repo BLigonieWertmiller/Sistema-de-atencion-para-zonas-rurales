@@ -41,6 +41,13 @@ function getDb(): Promise<SQLite.SQLiteDatabase> {
           team_code TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS teammate_checkins (
+          device_id TEXT PRIMARY KEY,
+          device_name TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          latitude REAL,
+          longitude REAL
+        );
       `);
       return db;
     });
@@ -216,9 +223,11 @@ export async function addToOutbox(
   );
 }
 
+export type OutboxKind = 'sos' | 'entry' | 'checkin';
+
 export interface OutboxItem {
   dedupKey: string;
-  kind: 'sos' | 'entry';
+  kind: OutboxKind;
   payload: unknown;
 }
 
@@ -227,7 +236,7 @@ export async function getOutboxItems(teamCode: string, maxAgeMs: number): Promis
   const db = await getDb();
   const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
 
-  const rows = await db.getAllAsync<{ dedup_key: string; kind: 'sos' | 'entry'; payload_json: string }>(
+  const rows = await db.getAllAsync<{ dedup_key: string; kind: OutboxKind; payload_json: string }>(
     'SELECT dedup_key, kind, payload_json FROM relay_outbox WHERE team_code = ? AND created_at >= ? ORDER BY created_at ASC',
     teamCode,
     cutoff
@@ -241,4 +250,81 @@ export async function pruneOutbox(maxAgeMs: number): Promise<void> {
   const db = await getDb();
   const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
   await db.runAsync('DELETE FROM relay_outbox WHERE created_at < ?', cutoff);
+}
+
+/**
+ * A diferencia de `addToOutbox` (un SOS o una nota son eventos, cada uno
+ * se guarda y se relaya), un check-in es *estado*: solo importa el más
+ * reciente de cada dispositivo. Esta función reemplaza la fila anterior
+ * de ese `deviceId` en vez de acumular, y solo si el nuevo check-in es
+ * más nuevo que el que ya estaba guardado (evita que un check-in viejo
+ * que llega tarde por la red pise a uno más nuevo).
+ */
+export async function upsertOutboxCheckin(
+  dedupKey: string,
+  payload: unknown,
+  teamCode: string,
+  sentAt: string
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO relay_outbox (dedup_key, kind, payload_json, team_code, created_at) VALUES (?, 'checkin', ?, ?, ?)
+     ON CONFLICT(dedup_key) DO UPDATE SET payload_json = excluded.payload_json, team_code = excluded.team_code, created_at = excluded.created_at
+     WHERE excluded.created_at > relay_outbox.created_at`,
+    dedupKey,
+    JSON.stringify(payload),
+    teamCode,
+    sentAt
+  );
+}
+
+/** "Último visto" de cada dispositivo conocido de la cuadrilla — para detectar quién quedó "sin novedades". */
+export async function upsertTeammateCheckin(
+  deviceId: string,
+  deviceName: string,
+  lastSeenAt: string,
+  location: GeoTag | null
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO teammate_checkins (device_id, device_name, last_seen_at, latitude, longitude) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(device_id) DO UPDATE SET
+       device_name = excluded.device_name,
+       last_seen_at = excluded.last_seen_at,
+       latitude = excluded.latitude,
+       longitude = excluded.longitude
+     WHERE excluded.last_seen_at > teammate_checkins.last_seen_at`,
+    deviceId,
+    deviceName,
+    lastSeenAt,
+    location?.latitude ?? null,
+    location?.longitude ?? null
+  );
+}
+
+export interface TeammateCheckin {
+  deviceId: string;
+  deviceName: string;
+  lastSeenAt: string;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export async function getAllTeammateCheckins(): Promise<TeammateCheckin[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    device_id: string;
+    device_name: string;
+    last_seen_at: string;
+    latitude: number | null;
+    longitude: number | null;
+  }>('SELECT * FROM teammate_checkins ORDER BY last_seen_at DESC');
+
+  return rows.map((row) => ({
+    deviceId: row.device_id,
+    deviceName: row.device_name,
+    lastSeenAt: row.last_seen_at,
+    latitude: row.latitude,
+    longitude: row.longitude
+  }));
 }

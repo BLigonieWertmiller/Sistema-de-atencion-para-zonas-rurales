@@ -11,6 +11,7 @@ import {
   EVT_MESSAGE,
   EVT_PEER_COUNT,
   peerMessageEventSchema,
+  type CheckinPayload,
   type EntryPayload,
   type PeerMessageEvent,
   type SosPayload
@@ -105,6 +106,11 @@ class PeerSync {
   broadcastEntry(payload: EntryPayload): void {
     if (!this.rpc) return;
     this.send(CMD_BROADCAST, { type: 'entry', payload });
+  }
+
+  broadcastCheckin(payload: CheckinPayload): void {
+    if (!this.rpc) return;
+    this.send(CMD_BROADCAST, { type: 'checkin', payload });
   }
 
   onPeerCountChange(listener: PeerCountListener): () => void {

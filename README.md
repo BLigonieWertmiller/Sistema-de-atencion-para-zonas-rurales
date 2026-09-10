@@ -124,6 +124,16 @@ Peer A ──┐                                              ┌── Peer B
   en el momento del botón, la confirmación lo dice explícitamente ("Sin
   pares conectados ahora — se manda sola apenas aparezca uno") — nunca
   finge haber avisado a alguien si no lo hizo.
+- **Check-in automático ("estoy activo"):** el SOS cubre "algo salió mal y
+  llegué a apretar el botón" — pero el caso más preocupante es el otro:
+  alguien queda incapacitado y *no* llega a apretar nada. Por eso cada
+  dispositivo manda solo, cada 15 minutos mientras está unido a una
+  cuadrilla, una señal de presencia con su ubicación. Si hace más de 45
+  minutos que no se sabe nada de un compañero, la pantalla Bitácora lo
+  marca como "sin novedades" — la ausencia misma es la alarma, se detecta
+  aunque esa persona nunca haya tocado el teléfono. Corre por el mismo
+  buzón de store-and-forward: no hace falta haber visto a esa persona
+  directamente, alcanza con que alguien que sí la vio te pase la posta.
 - **Sin servidor, en ningún punto.** El descubrimiento de pares usa la DHT
   pública de Hyperswarm/Pear (o bootstrap propio en red local) o el radio
   BLE directamente; una vez conectados, el enlace es directo entre los dos
@@ -368,14 +378,15 @@ src/
     stt.ts                    Transcripción (Whisper on-device)
     tts.ts                     Confirmación hablada (Supertonic on-device + fallback)
     translate.ts               Traducción (reusa el LLM ya cargado)
-    database.ts                Bitácora, checklist, settings y dedup P2P en SQLite
+    database.ts                Bitácora, checklist, settings, dedup y relay_outbox/check-ins P2P en SQLite
     location.ts                Geoetiquetado
     report.ts                    Reporte del día (texto + PDF)
     identity.ts                   Id de dispositivo, nombre y código de cuadrilla
   p2p/
     protocol.ts             Contrato RN ⇄ worklet + schemas zod de validación
     peerSync.ts               Puente RN ⇄ worklet Bare (bare-rpc sobre worklet.IPC)
-    workletBundle.generated.ts  Bundle de p2p/worklet.js embebido (generado, versionado)
+    blePermissions.ts           Permisos de runtime de Bluetooth (Android 12+)
+    workletBundle.generated.ts    Bundle de p2p/worklet.js embebido (generado, versionado)
   hooks/
     useFieldAgent.ts        Orquesta el loop de voz completo (estado de la UI)
     usePeerSync.ts            Conecta al swarm, valida y refleja lo que llega de pares
