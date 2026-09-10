@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { addLogEntry, markReceived, wasAlreadyReceived } from '../services/database';
 import { getDeviceName, getOrCreateDeviceId, getTeamCode, setTeamCode as persistTeamCode } from '../services/identity';
+import { ensureBlePermissions } from '../p2p/blePermissions';
 import { peerSync } from '../p2p/peerSync';
 import type { EntryPayload, PeerMessageEvent, SosPayload } from '../p2p/protocol';
 import type { LogEntry } from '../types';
@@ -60,7 +61,10 @@ export function usePeerSync(onEntriesChanged?: () => void): PeerSyncState {
     void (async () => {
       const savedCode = await getTeamCode();
       setTeamCodeState(savedCode ?? '');
-      if (savedCode) void peerSync.join(savedCode);
+      if (savedCode) {
+        await ensureBlePermissions();
+        void peerSync.join(savedCode);
+      }
     })();
 
     return () => {
@@ -111,7 +115,10 @@ export function usePeerSync(onEntriesChanged?: () => void): PeerSyncState {
     await persistTeamCode(trimmed);
     setTeamCodeState(trimmed);
     peerSync.leave();
-    if (trimmed) void peerSync.join(trimmed);
+    if (trimmed) {
+      await ensureBlePermissions();
+      void peerSync.join(trimmed);
+    }
   }, []);
 
   const broadcastNewEntry = useCallback(async (entry: LogEntry) => {
