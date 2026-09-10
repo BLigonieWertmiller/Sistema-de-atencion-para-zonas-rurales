@@ -85,8 +85,9 @@ Peer A ──┐                                              ┌── Peer B
          └──────────────────── swarm P2P ─────────────────┘
               topic = SHA-256("<código de cuadrilla>")
 
-  botón SOS ──► worklet Bare (p2p/worklet.js) ──► gossip a un salto ──► worklet Bare ──► alerta en pantalla + voz
-  nota de voz ─┘                                                    └─ bitácora del compañero
+  botón SOS ──► buzón local (relay_outbox) ──► worklet Bare ──► worklet Bare ──► alerta en pantalla + voz
+  nota de voz ─┘        │                                                    └─ bitácora del compañero
+                         └─ se le vuelve a pasar al próximo par que aparezca, hasta 72hs, aunque no haya visto al que lo originó
 ```
 
 - **Identificación del equipo:** todos los que cargan el mismo "código de
@@ -101,17 +102,28 @@ Peer A ──┐                                              ┌── Peer B
   de conexión cifrada (`NoiseSecretStream`), así que el resto del código
   (gossip, dedup, UI) no distingue por qué radio llegó un mensaje.
 - **Qué se sincroniza:** notas, ítems de checklist y traducciones que cada
-  uno generó, más las alertas SOS — a un salto (entre dispositivos
-  conectados directamente, no como red mesh multi-salto) para mantener el
-  protocolo simple y auditable.
+  uno generó, más las alertas SOS.
+- **Store-and-forward, no solo un salto.** Lo más probable en el campo es
+  que nadie esté conectado en el instante exacto en que se aprieta el SOS
+  o se registra una nota. Por eso todo mensaje —propio, o escuchado de
+  otro peer— queda en un buzón local (`relay_outbox` en SQLite) y se le
+  vuelve a pasar automáticamente a la próxima persona que aparezca en
+  rango, aunque nunca haya visto al que lo originó. Así una alerta puede
+  viajar de mano en mano por la cuadrilla sin que dos personas hayan
+  estado nunca conectadas directamente. Cada mensaje se relaya hasta 72hs
+  desde que se originó (después de eso deja de propagarse, pero sigue en
+  la bitácora local del que lo tenía). El dedup por `(deviceId,
+  timestamp)` evita que se muestre o se guarde dos veces, sin importar por
+  cuántas manos haya pasado.
 - **Botón de SOS:** deliberadamente separado del flujo de voz — en una
   emergencia real no hay que depender de que un LLM interprete bien una
   frase dicha bajo estrés. Mantener presionado ~2s (como el SOS de un
-  celular) captura ubicación + hora, lo guarda localmente, y lo manda por
-  **los dos transportes** a cualquier par conectado. Si no hay pares
-  conectados en ese momento, la confirmación lo dice explícitamente
-  ("Guardada localmente, sin pares conectados") — nunca finge haber avisado
-  a alguien si no lo hizo.
+  celular) captura ubicación + hora, lo guarda localmente, lo manda por
+  **los dos transportes** a cualquier par conectado ahora mismo, y lo deja
+  en el buzón para los que aparezcan después. Si no hay pares conectados
+  en el momento del botón, la confirmación lo dice explícitamente ("Sin
+  pares conectados ahora — se manda sola apenas aparezca uno") — nunca
+  finge haber avisado a alguien si no lo hizo.
 - **Sin servidor, en ningún punto.** El descubrimiento de pares usa la DHT
   pública de Hyperswarm/Pear (o bootstrap propio en red local) o el radio
   BLE directamente; una vez conectados, el enlace es directo entre los dos
@@ -193,8 +205,12 @@ límite (cero red, Bluetooth directo). Lo que queda como limitación real:
   metros, no todo el predio).
 - `ble-swarm` está marcado `experimental` por sus propios autores (Holepunch)
   — la API puede cambiar, y no se probó en hardware real en este entorno.
-- Sigue siendo sincronización a un salto (ver el punto de arriba), en
-  cualquiera de los dos transportes.
+- El relay (store-and-forward) solo avanza cuando alguien enciende la app
+  y se cruza en rango con otro par — no hay reenvío en segundo plano si la
+  app está cerrada, y en iOS en particular el escaneo BLE en background
+  está muy restringido por el sistema operativo. En la práctica, esto
+  significa que la app tiene que estar abierta (pantalla prendida o al
+  menos en primer plano) para que el relay funcione de manera confiable.
 
 ## Seguridad
 
@@ -256,6 +272,15 @@ Puntos revisados y su estado:
   notas/alertas de esa cuadrilla, no ejecución de código ni acceso a otros
   datos del dispositivo. Recomendación operativa: tratar el código como una
   contraseña compartida y rotarlo por turno o misión.
+- **El buzón de relay (`relay_outbox`) no abre superficie nueva.** Lo que
+  se relaya ya pasó por la validación zod al recibirlo (se guarda el
+  objeto ya validado, no bytes crudos de un peer) y por el saneamiento de
+  longitud de `src/agent/sanitize.ts` en su origen — relayarlo no ejecuta
+  nada nuevo ni revalida menos que guardarlo. Para acotar el caso de un
+  peer que intente inundar la red con mensajes falsos para que se
+  propaguen más lejos: el buzón tiene un tope de 200 mensajes por
+  dispositivo y un TTL de 72hs, así que la amplificación tiene un techo
+  fijo, no crece sin límite.
 
 ## Base preexistente utilizada (declarado explícitamente)
 

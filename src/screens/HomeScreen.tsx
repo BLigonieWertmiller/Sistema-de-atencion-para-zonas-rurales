@@ -19,7 +19,7 @@ export function HomeScreen({ agent, peer }: { agent: FieldAgentState; peer: Peer
           downloadPercent={agent.downloadPercent}
         />
         <View style={styles.topRowSpacer}>
-          <SosButton peerCount={peer.peerCount} onSent={() => void agent.refreshEntries()} />
+          <SosButton peer={peer} onSent={() => void agent.refreshEntries()} />
         </View>
       </View>
 
