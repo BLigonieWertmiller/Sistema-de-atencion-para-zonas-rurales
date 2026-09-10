@@ -47,13 +47,31 @@ export const entryPayloadSchema = z.object({
   longitude: geoField
 });
 
+/**
+ * "Estoy activo" — se manda solo, cada tanto, sin que el usuario haga
+ * nada (ver `CHECKIN_INTERVAL_MS` en `usePeerSync.ts`). No es un evento
+ * que haya que entregar una sola vez como el SOS o una nota: es estado
+ * ("último visto de este dispositivo"), así que en `relay_outbox` un
+ * check-in nuevo reemplaza al anterior del mismo dispositivo en vez de
+ * acumularse — ver `upsertOutboxCheckin` en `src/services/database.ts`.
+ */
+export const checkinPayloadSchema = z.object({
+  deviceId: z.string().max(MAX_SHORT),
+  deviceName: z.string().max(MAX_SHORT),
+  sentAt: z.string().max(MAX_SHORT),
+  latitude: geoField,
+  longitude: geoField
+});
+
 export const peerMessageEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('sos'), payload: sosPayloadSchema, fromPeer: z.string().max(MAX_SHORT) }),
-  z.object({ type: z.literal('entry'), payload: entryPayloadSchema, fromPeer: z.string().max(MAX_SHORT) })
+  z.object({ type: z.literal('entry'), payload: entryPayloadSchema, fromPeer: z.string().max(MAX_SHORT) }),
+  z.object({ type: z.literal('checkin'), payload: checkinPayloadSchema, fromPeer: z.string().max(MAX_SHORT) })
 ]);
 
 export type SosPayload = z.infer<typeof sosPayloadSchema>;
 export type EntryPayload = z.infer<typeof entryPayloadSchema>;
+export type CheckinPayload = z.infer<typeof checkinPayloadSchema>;
 export type PeerMessageEvent = z.infer<typeof peerMessageEventSchema>;
 export type PeerMessageType = PeerMessageEvent['type'];
 
@@ -73,4 +91,9 @@ export function dedupKeyForSos(payload: SosPayload): string {
 
 export function dedupKeyForEntry(payload: EntryPayload): string {
   return `entry:${payload.deviceId}:${payload.createdAt}`;
+}
+
+/** Sin timestamp a propósito: un check-in nuevo del mismo dispositivo reemplaza al anterior, no se acumula. */
+export function outboxKeyForCheckin(deviceId: string): string {
+  return `checkin:${deviceId}`;
 }
