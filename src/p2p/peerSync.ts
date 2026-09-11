@@ -16,7 +16,15 @@ import {
   type PeerMessageEvent,
   type SosPayload
 } from './protocol';
+import { verifyCheckin, verifyEntry, verifySos } from './signing';
 import { WORKLET_BUNDLE_BASE64 } from './workletBundle.generated';
+
+/** Firma inválida (o `deviceId` que no es una clave pública real) para el tipo de mensaje que dice ser. */
+function hasValidSignature(event: PeerMessageEvent): boolean {
+  if (event.type === 'sos') return verifySos(event.payload);
+  if (event.type === 'entry') return verifyEntry(event.payload);
+  return verifyCheckin(event.payload);
+}
 
 type PeerCountListener = (count: number) => void;
 type MessageListener = (event: PeerMessageEvent) => void;
@@ -68,6 +76,14 @@ class PeerSync {
           const parsed = peerMessageEventSchema.safeParse(data);
           if (!parsed.success) {
             console.warn('Mensaje P2P descartado: no matchea el schema esperado.', parsed.error.message);
+            return;
+          }
+          // La forma es válida, pero eso no prueba quién lo mandó: deviceId
+          // es una clave pública, así que sin una firma que verifique contra
+          // ella, cualquier par podría hablar "en nombre de" otro deviceId
+          // (ver el comentario en protocol.ts).
+          if (!hasValidSignature(parsed.data)) {
+            console.warn('Mensaje P2P descartado: firma inválida para el deviceId declarado.');
             return;
           }
           this.messageListeners.forEach((listener) => listener(parsed.data));

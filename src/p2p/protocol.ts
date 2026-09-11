@@ -7,12 +7,21 @@ import { z } from 'zod';
  * si cambiás uno, cambiá el otro.
  *
  * Todo lo que llega por acá viene de otro dispositivo en el swarm P2P — el
- * código de cuadrilla es la única puerta de entrada, no hay autenticación
- * criptográfica de identidad. Un par con el código puede mandar cualquier
- * `deviceName`/`text` que quiera, así que TODO payload entrante se valida
- * con zod (nunca se confía en la forma que dice tener) y se acota en
- * longitud antes de tocar la base de datos o la UI. Ver la sección
- * "Seguridad" del README para el detalle del modelo de confianza.
+ * código de cuadrilla es la única puerta de entrada a la red, así que
+ * cualquiera con el código puede conectarse y mandar mensajes. Por eso TODO
+ * payload entrante se valida con zod (nunca se confía en la forma que dice
+ * tener) y se acota en longitud antes de tocar la base de datos o la UI.
+ *
+ * Además, `deviceId` no es un identificador arbitrario: ES la clave pública
+ * ed25519 del dispositivo que lo manda (ver `src/services/identity.ts`), y
+ * cada payload trae una firma (`sig`) sobre el resto de sus campos
+ * verificable con esa misma clave (`src/p2p/signing.ts`). Un mensaje cuya
+ * firma no verifica se descarta ANTES de tocar la base de datos, aunque
+ * matchee el schema — si no, cualquier par del swarm podría mandar un
+ * check-in o un SOS "de parte de" el `deviceId` de otra persona (por
+ * ejemplo, para simular que un compañero real está bien y tapar una
+ * ausencia real). Ver la sección "Seguridad" del README para el detalle
+ * completo del modelo de confianza.
  */
 
 // RN -> worklet
@@ -26,25 +35,31 @@ export const EVT_MESSAGE = 11;
 
 const MAX_TEXT = 600;
 const MAX_SHORT = 60;
+// Clave pública ed25519 en base64 (32 bytes -> 44 chars) y firma detached
+// (64 bytes -> 88 chars): con margen para variaciones de padding.
+const MAX_KEY = 64;
+const MAX_SIG = 100;
 
 const geoField = z.number().finite().nullable();
 
 export const sosPayloadSchema = z.object({
-  deviceId: z.string().max(MAX_SHORT),
+  deviceId: z.string().max(MAX_KEY),
   deviceName: z.string().max(MAX_SHORT),
   sentAt: z.string().max(MAX_SHORT),
   latitude: geoField,
-  longitude: geoField
+  longitude: geoField,
+  sig: z.string().max(MAX_SIG)
 });
 
 export const entryPayloadSchema = z.object({
-  deviceId: z.string().max(MAX_SHORT),
+  deviceId: z.string().max(MAX_KEY),
   deviceName: z.string().max(MAX_SHORT),
   type: z.enum(['nota', 'traduccion', 'checklist']),
   text: z.string().max(MAX_TEXT),
   createdAt: z.string().max(MAX_SHORT),
   latitude: geoField,
-  longitude: geoField
+  longitude: geoField,
+  sig: z.string().max(MAX_SIG)
 });
 
 /**
@@ -56,11 +71,12 @@ export const entryPayloadSchema = z.object({
  * acumularse — ver `upsertOutboxCheckin` en `src/services/database.ts`.
  */
 export const checkinPayloadSchema = z.object({
-  deviceId: z.string().max(MAX_SHORT),
+  deviceId: z.string().max(MAX_KEY),
   deviceName: z.string().max(MAX_SHORT),
   sentAt: z.string().max(MAX_SHORT),
   latitude: geoField,
-  longitude: geoField
+  longitude: geoField,
+  sig: z.string().max(MAX_SIG)
 });
 
 export const peerMessageEventSchema = z.discriminatedUnion('type', [

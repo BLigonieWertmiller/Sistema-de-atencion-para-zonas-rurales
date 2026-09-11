@@ -271,17 +271,41 @@ Puntos revisados y su estado:
   URLs de servicios propios hardcodeadas en el código (verificado por grep).
 - **Modelo de confianza del P2P (Pears).** El código de cuadrilla es la
   única puerta de entrada al swarm — nunca viaja en texto plano (se manda un
-  hash SHA-256 como *topic*), pero no hay autenticación criptográfica de
-  identidad entre pares: cualquiera con el código puede unirse y mandar
-  mensajes con cualquier `deviceName`. Por diseño, esto se trata como
-  entrada no confiable: todo mensaje recibido de un par se valida con zod
-  contra un schema estricto (`src/p2p/protocol.ts`, tipos y longitudes
-  acotadas) *antes* de tocar la base de datos o la UI — un payload que no
-  matchea se descarta y se loguea, nunca se guarda a medias. El peor caso de
-  un código de cuadrilla filtrado es que alguien vea o falsifique
-  notas/alertas de esa cuadrilla, no ejecución de código ni acceso a otros
-  datos del dispositivo. Recomendación operativa: tratar el código como una
+  hash SHA-256 como *topic*) — así que cualquiera con el código puede
+  unirse y mandar mensajes. Por diseño, esto se trata como entrada no
+  confiable en dos niveles:
+  - **Forma:** todo mensaje recibido de un par se valida con zod contra un
+    schema estricto (`src/p2p/protocol.ts`, tipos y longitudes acotadas)
+    *antes* de tocar la base de datos o la UI — un payload que no matchea
+    se descarta y se loguea, nunca se guarda a medias.
+  - **Identidad:** `deviceId` no es un valor arbitrario, es la clave
+    pública ed25519 del dispositivo (`src/services/identity.ts`, generada
+    una sola vez, la privada nunca sale del dispositivo), y cada mensaje
+    trae una firma (`sig`) verificada contra esa clave
+    (`src/p2p/signing.ts`) antes de aceptarlo. Sin esto, cualquier par del
+    swarm podría mandar un check-in o un SOS "de parte de" el `deviceId` de
+    otra persona — por ejemplo, simular que un compañero real está bien
+    para tapar una ausencia real, justo el escenario que el check-in
+    automático existe para detectar. Con la firma, eso requiere la clave
+    privada de esa persona, que nunca circula por la red.
+
+  Lo que el código de cuadrilla filtrado sigue permitiendo (aceptado como
+  límite de diseño, no un bug): alguien sin el `deviceId` de nadie puede
+  igual unirse, ver el tráfico de esa cuadrilla, y mandar mensajes propios
+  bajo una identidad nueva que se genera sola — no hay una lista blanca de
+  quién puede sumarse. Nunca ejecución de código ni acceso a otros datos
+  del dispositivo. Recomendación operativa: tratar el código como una
   contraseña compartida y rotarlo por turno o misión.
+- **Resiliencia del transporte a un par abusivo.** El worklet
+  (`p2p/worklet.js`) trata a cada conexión como potencialmente hostil, no
+  solo a nivel de contenido: si un par nunca manda un salto de línea (o
+  manda una línea desproporcionadamente larga), el buffer de reensamblado
+  tiene un tope (`MAX_BUFFER_BYTES`) y la conexión se corta en vez de dejar
+  crecer memoria sin límite; si un par manda mensajes por encima de un
+  umbral razonable por ventana de tiempo (`RATE_LIMIT_MAX_MESSAGES` /
+  `RATE_LIMIT_WINDOW_MS`), también se corta — para que inundar con mensajes
+  válidos no sea una forma de saturar SQLite, la UI, o de gastar alertas
+  falsas en cadena.
 - **El buzón de relay (`relay_outbox`) no abre superficie nueva.** Lo que
   se relaya ya pasó por la validación zod al recibirlo (se guarda el
   objeto ya validado, no bytes crudos de un peer) y por el saneamiento de
@@ -409,9 +433,11 @@ src/
 - `ble-swarm`, el transporte Bluetooth para el caso de cero red compartida,
   está marcado `experimental` por sus propios autores (Holepunch); el
   alcance real de BLE es corto (~10-30m).
-- No hay autenticación criptográfica de identidad entre pares del swarm más
-  allá de compartir el código de cuadrilla — ver la nota de seguridad
-  correspondiente.
+- El código de cuadrilla sigue siendo la única puerta de entrada al swarm
+  (no hay lista blanca de quién puede sumarse con ese código), aunque cada
+  `deviceId` ya está atado a una firma criptográfica que impide que un par
+  hable en nombre de otro — ver "Modelo de confianza del P2P" en la sección
+  de Seguridad.
 - No se probó en un dispositivo físico dentro de este entorno de desarrollo
   (sandbox sin Android/iOS SDK, sin emulador, sin micrófono, sin radio BLE).
   Lo que sí se verificó a mano en este repo: `tsc --noEmit` limpio contra

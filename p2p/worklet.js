@@ -48,6 +48,20 @@ const EVT_MESSAGE = 11 // data: { type: 'sos' | 'entry' | 'checkin', payload, fr
 
 const MESSAGE_TYPES = new Set(['sos', 'entry', 'checkin'])
 
+// Un peer del swarm no está autenticado más allá de conocer el código de
+// cuadrilla (ver protocol.ts), así que se lo trata como entrada hostil a
+// nivel de transporte, no solo de contenido:
+//   - MAX_BUFFER_BYTES: si nunca manda un '\n' (o manda una línea gigante),
+//     el buffer de reensamblado creceria sin límite -> agotamiento de
+//     memoria del proceso Bare. Pasado el tope, se corta la conexión.
+//   - RATE_LIMIT_*: sin esto, un peer podría inundar con mensajes
+//     perfectamente válidos (payload legítimo, "sos"/"entry" nuevos con
+//     cada envío) para saturar SQLite/la UI del lado React Native, o para
+//     "gastar" alertas SOS falsas en cadena.
+const MAX_BUFFER_BYTES = 64 * 1024
+const RATE_LIMIT_WINDOW_MS = 10_000
+const RATE_LIMIT_MAX_MESSAGES = 40
+
 const { IPC } = BareKit
 
 // Una sola identidad Noise compartida entre los dos transportes: el mismo
@@ -83,7 +97,22 @@ function attachPeer(socket, remotePublicKey) {
   const fromPeer = b4a.toString(remotePublicKey, 'hex').slice(0, 8)
 
   let buffer = ''
+  let messageTimestamps = []
+
+  function overRateLimit() {
+    const now = Date.now()
+    messageTimestamps = messageTimestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS)
+    messageTimestamps.push(now)
+    return messageTimestamps.length > RATE_LIMIT_MAX_MESSAGES
+  }
+
   socket.on('data', (chunk) => {
+    if (buffer.length + chunk.length > MAX_BUFFER_BYTES) {
+      // Peer abusivo: nunca manda '\n' o manda una línea absurdamente larga.
+      // Cortar la conexión en vez de dejar crecer el buffer sin límite.
+      socket.destroy()
+      return
+    }
     buffer += b4a.toString(chunk)
     let newlineIndex
     // eslint-disable-next-line no-cond-assign
@@ -91,6 +120,10 @@ function attachPeer(socket, remotePublicKey) {
       const line = buffer.slice(0, newlineIndex)
       buffer = buffer.slice(newlineIndex + 1)
       if (!line) continue
+      if (overRateLimit()) {
+        socket.destroy()
+        return
+      }
       try {
         const message = JSON.parse(line)
         if (message && MESSAGE_TYPES.has(message.type)) {

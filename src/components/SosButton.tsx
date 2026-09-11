@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 
 import type { PeerSyncState } from '../hooks/usePeerSync';
+import { signSos } from '../p2p/signing';
 import { addLogEntry } from '../services/database';
 import { getDeviceName, getOrCreateDeviceId } from '../services/identity';
 import { getCurrentGeoTag } from '../services/location';
@@ -73,13 +74,14 @@ export function SosButton({ peer, onSent }: SosButtonProps) {
     await addLogEntry('sos', 'Alerta SOS enviada', location, { deviceId, deviceName });
 
     const connectedPeers = peer.peerCount;
-    await peer.relaySos({
+    const unsigned = {
       deviceId,
       deviceName,
       sentAt,
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null
-    });
+    };
+    await peer.relaySos({ ...unsigned, sig: await signSos(unsigned) });
 
     const confirmation =
       connectedPeers > 0

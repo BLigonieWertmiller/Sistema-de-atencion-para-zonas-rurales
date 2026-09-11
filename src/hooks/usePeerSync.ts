@@ -24,6 +24,7 @@ import {
   type PeerMessageEvent,
   type SosPayload
 } from '../p2p/protocol';
+import { signCheckin, signEntry } from '../p2p/signing';
 import type { LogEntry } from '../types';
 
 export interface ReceivedSos {
@@ -121,13 +122,14 @@ export function usePeerSync(onEntriesChanged?: () => void): PeerSyncState {
       getCurrentGeoTag()
     ]);
     const sentAt = new Date().toISOString();
-    const payload: CheckinPayload = {
+    const unsigned = {
       deviceId,
       deviceName,
       sentAt,
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null
     };
+    const payload: CheckinPayload = { ...unsigned, sig: await signCheckin(unsigned) };
 
     peerSync.broadcastCheckin(payload);
     await upsertTeammateCheckin(deviceId, deviceName, sentAt, location);
@@ -279,7 +281,7 @@ export function usePeerSync(onEntriesChanged?: () => void): PeerSyncState {
     if (entry.type !== 'nota' && entry.type !== 'checklist' && entry.type !== 'traduccion') return;
     const [deviceName, deviceId] = await Promise.all([getDeviceName(), getOrCreateDeviceId()]);
 
-    const payload: EntryPayload = {
+    const unsigned = {
       deviceId,
       deviceName,
       type: entry.type,
@@ -288,6 +290,7 @@ export function usePeerSync(onEntriesChanged?: () => void): PeerSyncState {
       latitude: entry.latitude,
       longitude: entry.longitude
     };
+    const payload: EntryPayload = { ...unsigned, sig: await signEntry(unsigned) };
 
     peerSync.broadcastEntry(payload);
     const code = teamCodeRef.current;
